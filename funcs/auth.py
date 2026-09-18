@@ -14,7 +14,8 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-PASS = "https://www.tiktok.com/passport/web/account/info/"
+PASS_WEB = "https://www.tiktok.com/passport/web/account/info/"
+PASS_API = "https://api.tiktokv.com/passport/account/info/v2/"
 PAGE = "https://www.tiktok.com/foryou"
 ROOT = Path(__file__).resolve().parent.parent
 KEYS = [
@@ -215,17 +216,20 @@ class Auth:
     def ok_sess(self):
         return bool(self.cookies.get("sessionid") or self.cookies.get("sid_tt"))
 
-    def from_pass(self):
+    def from_pass(self, url=None):
+        url = url or PASS_API
         try:
-            r = self.client.get(PASS, params={"aid": "1459", "app_name": "tiktok_web"}, headers=self.headers())
+            r = self.client.get(url, params={"aid": "1459", "app_name": "tiktok_web"}, headers=self.headers())
             data = r.json().get("data") or {}
+            if data.get("error_code") or data.get("name") == "session_expired":
+                return False
             uid = data.get("user_id_str") or data.get("user_id")
             if not uid and not data.get("username"):
                 return False
             self.user = {
                 "id": str(uid) if uid else "",
                 "username": data.get("username") or "",
-                "nickname": data.get("screen_name") or "",
+                "nickname": data.get("screen_name") or data.get("name") or "",
                 "secUid": data.get("sec_user_id") or "",
             }
             return True
@@ -254,8 +258,28 @@ class Auth:
         except Exception:
             return False
 
+    def from_sids(self):
+        mid = self.cookies.get("multi_sids") or ""
+        uid = ""
+        if "%3A" in mid:
+            uid = mid.split("%3A", 1)[0]
+        elif ":" in mid:
+            uid = mid.split(":", 1)[0]
+        if not uid.isdigit():
+            return False
+        self.user = {"id": uid, "username": "", "nickname": "", "secUid": ""}
+        return True
+
     def login(self):
-        return self.ok_sess() and (self.from_pass() or self.from_page())
+        if not self.ok_sess():
+            return False
+        if self.from_pass(PASS_API):
+            return True
+        if self.from_pass(PASS_WEB):
+            return True
+        if self.from_page():
+            return True
+        return self.from_sids()
 
     def close(self):
         self.client.close()
