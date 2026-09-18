@@ -2,14 +2,14 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from rich.live import Live
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
+DOCKER = "-docker" in sys.argv
+
 from funcs.auth import env, load_auth
 from funcs.msg import Inbox
-from funcs.panel import view
 from funcs.streak import Streaks, as_code
 
 ACTION_COOLDOWN_SECONDS = 3000
@@ -172,7 +172,92 @@ class Bot:
                 note(f"refresh error: {exc}")
         return changed
 
-def launch():
+def _stamp():
+    return datetime.now(tz=timezone.utc).strftime("%H:%M:%S")
+
+def _log(msg):
+    print(f"[{_stamp()}] {msg}", flush=True)
+
+def _summary(bot):
+    rows = bot.streaks.list()
+    counts = {"active": 0, "waiting": 0, "lost": 0}
+    for row in rows:
+        st = row.get("status") or "?"
+        counts[st] = counts.get(st, 0) + 1
+    who = bot.auth.user.get("username") or bot.auth.user.get("id") or "?"
+    return f"@{who} streaks={len(rows)} active={counts.get('active', 0)} waiting={counts.get('waiting', 0)} lost={counts.get('lost', 0)}"
+
+def _loop_docker(bot, note):
+    refresh_fails = 0
+    next_refresh = time.monotonic()
+    note(_summary(bot))
+    while True:
+        now = time.monotonic()
+        if bot.auth_dead:
+            note("authentication failed")
+            time.sleep(REFRESH_INTERVAL_SECONDS)
+            continue
+        if now >= next_refresh:
+            try:
+                bot.refresh()
+                bot.tick(note)
+                refresh_fails = 0
+                next_refresh = now + REFRESH_INTERVAL_SECONDS
+                note(_summary(bot))
+            except Exception as exc:
+                bot.fresh = False
+                refresh_fails += 1
+                delay = min(
+                    REFRESH_BACKOFF_MAX_SECONDS,
+                    REFRESH_BACKOFF_BASE_SECONDS * (2 ** min(refresh_fails - 1, 6)),
+                )
+                next_refresh = now + delay
+                msg = str(exc).lower()
+                if "login" in msg or "auth" in msg or "session" in msg:
+                    bot.auth_dead = True
+                    note("authentication failed")
+                else:
+                    note(f"refresh failed: {exc}")
+        time.sleep(1)
+
+def _loop_rich(bot, note, events, started, bots):
+    from rich.live import Live
+    from funcs.panel import view
+
+    with Live(view(bots, events, started), refresh_per_second=4, screen=True) as live:
+        refresh_fails = 0
+        next_refresh = time.monotonic()
+        while True:
+            now = time.monotonic()
+            if bot.auth_dead:
+                note("authentication failed")
+                live.update(view(bots, events, started))
+                time.sleep(UI_UPDATE_INTERVAL_SECONDS)
+                continue
+            if now >= next_refresh:
+                try:
+                    bot.refresh()
+                    bot.tick(note)
+                    refresh_fails = 0
+                    next_refresh = now + REFRESH_INTERVAL_SECONDS
+                except Exception as exc:
+                    bot.fresh = False
+                    refresh_fails += 1
+                    delay = min(
+                        REFRESH_BACKOFF_MAX_SECONDS,
+                        REFRESH_BACKOFF_BASE_SECONDS * (2 ** min(refresh_fails - 1, 6)),
+                    )
+                    next_refresh = now + delay
+                    msg = str(exc).lower()
+                    if "login" in msg or "auth" in msg or "session" in msg:
+                        bot.auth_dead = True
+                        note("authentication failed")
+                    else:
+                        note(f"refresh failed: {exc}")
+            live.update(view(bots, events, started))
+            time.sleep(UI_UPDATE_INTERVAL_SECONDS)
+
+def launch(docker=False):
     auth = load_auth(ROOT)
     bot = Bot(auth)
     why = bot.ready()
@@ -187,47 +272,22 @@ def launch():
     except Exception as exc:
         print(f"refresh failed: {exc}")
         sys.exit(1)
-    events = []
-    started = int(time.time())
-    bots = [bot]
-    refresh_fails = 0
-    next_refresh = time.monotonic()
-    def note(msg):
-        events.append({"t": datetime.now(tz=timezone.utc).strftime("%H:%M:%S"), "m": msg})
-        del events[:-10]
+    who = bot.auth.user.get("username") or bot.auth.user.get("id") or "?"
     try:
-        with Live(view(bots, events, started), refresh_per_second=4, screen=True) as live:
-            while True:
-                now = time.monotonic()
-                if bot.auth_dead:
-                    note("authentication failed")
-                    live.update(view(bots, events, started))
-                    time.sleep(UI_UPDATE_INTERVAL_SECONDS)
-                    continue
-                if now >= next_refresh:
-                    try:
-                        bot.refresh()
-                        bot.tick(note)
-                        refresh_fails = 0
-                        next_refresh = now + REFRESH_INTERVAL_SECONDS
-                    except Exception as exc:
-                        bot.fresh = False
-                        refresh_fails += 1
-                        delay = min(
-                            REFRESH_BACKOFF_MAX_SECONDS,
-                            REFRESH_BACKOFF_BASE_SECONDS * (2 ** min(refresh_fails - 1, 6)),
-                        )
-                        next_refresh = now + delay
-                        msg = str(exc).lower()
-                        if "login" in msg or "auth" in msg or "session" in msg:
-                            bot.auth_dead = True
-                            note("authentication failed")
-                        else:
-                            note(f"refresh failed: {exc}")
-                live.update(view(bots, events, started))
-                time.sleep(UI_UPDATE_INTERVAL_SECONDS)
+        if docker:
+            note = _log
+            note(f"started docker mode as @{who}")
+            _loop_docker(bot, note)
+        else:
+            events = []
+            started = int(time.time())
+            bots = [bot]
+            def note(msg):
+                events.append({"t": _stamp(), "m": msg})
+                del events[:-10]
+            _loop_rich(bot, note, events, started, bots)
     finally:
         auth.close()
 
 if __name__ == "__main__":
-    launch()
+    launch(docker=DOCKER)
