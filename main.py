@@ -39,10 +39,10 @@ class Bot:
 
     def ready(self):
         if not self.auth.ok_sess():
-            return False
+            return "no session"
         if not self.auth.login():
-            return False
-        return True
+            return "bad session"
+        return ""
 
     def refresh(self):
         if self.auth_dead:
@@ -175,8 +175,12 @@ class Bot:
 def launch():
     auth = load_auth(ROOT)
     bot = Bot(auth)
-    if not bot.ready():
-        print("login failed, drop a .env or cookies.json in here")
+    why = bot.ready()
+    if why == "no session":
+        print("login failed: no TIKTOK_SESSIONID / TIKTOK_SID_TT in env, .env, or cookies.json")
+        sys.exit(1)
+    if why == "bad session":
+        print("login failed: cookies present but TikTok rejected the session (expired or invalid)")
         sys.exit(1)
     try:
         bot.refresh()

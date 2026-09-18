@@ -60,10 +60,19 @@ python main.py
 
 ### docker
 
+Runtime env vars and `.env` both work. Prefer passing them into the container:
+
 ```bash
 docker build -f dockerfile -t tt .
 docker run --env-file .env -it tt
 ```
+
+If your panel has **Create Environment File**, that often only writes a host `.env` for the build — it does **not** always inject vars into the running container. Either:
+
+- turn that off and set real container environment variables, or
+- run with `--env-file .env` / mount the file at `/app/.env`
+
+Names must match exactly (`TIKTOK_SESSIONID`, `STREAK_MESSAGE`, …). No quotes needed in Docker env UI values.
 
 ## Support
 

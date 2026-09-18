@@ -125,10 +125,16 @@ def load_env(folder=None):
     folder = Path(folder or ROOT)
     data, _ = fill_env(folder)
     data.update(read_env(folder / ".env"))
-    for k, v in data.items():
-        if k in KEYS and v:
+    if data.get("streak_message") and not data.get("STREAK_MESSAGE"):
+        data["STREAK_MESSAGE"] = data.get("streak_message") or ""
+    for k in KEYS:
+        cur = (os.environ.get(k) or "").strip().strip('"').strip("'")
+        if cur:
+            continue
+        v = (data.get(k) or "").strip().strip('"').strip("'")
+        if v:
             os.environ[k] = v
-    return data
+    return {k: env(k) for k in KEYS}
 
 def jar_env():
     return {cname: env(ekey) for ekey, cname in ENV2C.items() if env(ekey)}
