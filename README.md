@@ -52,7 +52,9 @@ Paste into `.env` using the exact `TIKTOK_*` labels, or drop a `cookies.json` in
 
 6. Set `STREAK_MESSAGE` in `.env` if you want
 
-7. Run:
+7. `NUDGE_TIME` is the wait between reminder messages, in seconds only. `14400` is 4 hours. Blank uses that same default. Convert hours or minutes with the [time to seconds calculator](https://www.inchcalculator.com/time-to-seconds-calculator/).
+
+8. Run:
 
 ```bash
 python main.py

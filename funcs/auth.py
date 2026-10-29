@@ -20,6 +20,7 @@ PAGE = "https://www.tiktok.com/foryou"
 ROOT = Path(__file__).resolve().parent.parent
 KEYS = [
     "STREAK_MESSAGE",
+    "NUDGE_TIME",
     "TIKTOK_SESSIONID",
     "TIKTOK_SESSIONID_SS",
     "TIKTOK_SID_TT",

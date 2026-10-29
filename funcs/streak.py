@@ -18,6 +18,7 @@ BAD = (200008, 200009, 100013, 100019, 100024)
 RESTORE = "restore"
 SEND = "send"
 NUDGE = "nudge"
+NUDGE_DEFAULT = 4 * 3600
 
 def as_code(val, default=-1):
     try:
@@ -106,6 +107,12 @@ def _pad():
         return max(0, secs)
     hrs = as_int("WARN_HOURS")
     return max(0, hrs * 3600) if hrs is not None else 0
+
+def gap():
+    secs = as_int("NUDGE_TIME")
+    if secs is None:
+        return NUDGE_DEFAULT
+    return max(0, secs)
 
 def _row(chunk, my="", now=None):
     now = int(now or time.time())

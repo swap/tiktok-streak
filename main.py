@@ -10,7 +10,7 @@ DOCKER = "-docker" in sys.argv
 
 from funcs.auth import env, load_auth
 from funcs.msg import Inbox
-from funcs.streak import Streaks, as_code
+from funcs.streak import Streaks, as_code, gap
 
 ACTION_COOLDOWN_SECONDS = 3000
 FAIL_BACKOFF_BASE_SECONDS = 30
@@ -31,6 +31,7 @@ class Bot:
         self.streaks = Streaks(auth)
         self.inbox = Inbox(auth)
         self.msg = env("STREAK_MESSAGE")
+        self.gap = gap()
         self.ok_at = {}
         self.fail = {}
         self.fresh = False
@@ -52,9 +53,10 @@ class Bot:
         self.last_ok = time.monotonic()
         return rows
 
-    def cooled(self, key):
+    def cooled(self, key, wait=None):
         now = time.monotonic()
-        if now - float(self.ok_at.get(key) or 0) < ACTION_COOLDOWN_SECONDS:
+        limit = ACTION_COOLDOWN_SECONDS if wait is None else wait
+        if now - float(self.ok_at.get(key) or 0) < limit:
             return True
         info = self.fail.get(key)
         if info and now < float(info.get("until") or 0):
@@ -149,7 +151,8 @@ class Bot:
             uid = str(row.get("id") or "")
             for act in item["acts"]:
                 key = f"{uid}:{act}"
-                if self.cooled(key):
+                wait = self.gap if act == NUDGE else None
+                if self.cooled(key, wait):
                     continue
                 cur = self.streaks.rows.get(uid) or row
                 if act == RESTORE:
