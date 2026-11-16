@@ -2,10 +2,15 @@ import json
 import time
 import uuid
 from .auth import Auth
+from .guard import heads, load as load_guard
 
 API = "https://api.tiktokv.com"
+IM = "https://im-api-sg.tiktok.com"
 INIT = f"{API}/v2/message/get_by_user_init"
-SEND = f"{API}/v1/message/send"
+SEND = f"{IM}/v1/message/send"
+SEND_QS = {"aid": "1988", "version_code": "1.0.0", "app_name": "tiktok_web", "device_platform": "web_pc"}
+SDK = "1.8.5"
+BUILD = "feffaa1:master"
 SKIP = ("rate", "limit", "banned", "forbid", "block", "spam", "risk", "verify")
 HDR = {
     "Content-Type": "application/x-protobuf",
@@ -92,6 +97,56 @@ def _txt(v):
         except Exception:
             return ""
     return "" if v is None else str(v)
+
+def _ack(buf, http):
+    http = int(http)
+    code = http
+    text = ""
+    raw = None
+    head = bytes(buf or b"").lstrip()[:1]
+    if head in (b"{", b"["):
+        try:
+            data = json.loads(buf.decode())
+        except Exception:
+            return code, f"http {http}"
+        if not isinstance(data, dict):
+            return code, f"http {http}"
+        raw = data.get("status_code")
+        text = str(data.get("status_msg") or "")
+        if raw is None:
+            return code, text or f"http {http}"
+        try:
+            code = int(raw)
+        except (TypeError, ValueError):
+            return http, text or f"http {http}"
+        return code, text or ("OK" if code == 0 else f"code {code}")
+    env = _pb(buf)
+    raw = _one(env, 3)
+    text = _txt(_one(env, 4))
+    cmd = _one(env, 1)
+    body = _one(env, 6)
+    inner = {}
+    if isinstance(body, (bytes, bytearray)):
+        inner = _pb(_one(_pb(body), 100, b"") or b"")
+    ist = _one(inner, 3)
+    imsg = _txt(_one(inner, 6))
+    if raw is None:
+        if text and text != "OK":
+            code = http
+        elif http == 200 and (cmd is not None or body is not None):
+            code = 0
+        else:
+            code = http
+    else:
+        try:
+            code = int(raw)
+        except (TypeError, ValueError):
+            return http, text or f"http {http}"
+    if isinstance(ist, int) and 0 < ist < 10000000 and code == 0:
+        code = ist
+        if imsg:
+            text = imsg
+    return code, text or ("OK" if code == 0 else f"code {code}")
 
 class Inbox:
     def __init__(self, auth=None):
@@ -194,32 +249,49 @@ class Inbox:
         if not info:
             return {"ok": False, "code": -4, "msg": "no conv", "skip": False}
         mid = str(uuid.uuid4())
-        now = int(time.time() * 1000)
-        content = json.dumps(
-            {"mention_users": [], "aweType": 0, "richTextInfos": [], "text": text},
-            separators=(",", ":"),
-        )
+        guard = load_guard()
+        if not guard:
+            return {"ok": False, "code": -8, "msg": "no guard", "skip": False}
+        content = json.dumps({"aweType": 0, "text": text}, separators=(",", ":"))
         body = b"".join(
             [
                 _str(1, info["cid"]),
-                _vi(2, info["type"]),
-                _vi(3, info["short"]),
+                _vi(2, int(info["type"] or 1)),
+                _vi(3, int(info["short"] or 0)),
                 _str(4, content),
-                _kv(5, "s:client_message_id", mid),
-                _kv(5, "s:stime", str(now)),
-                _kv(5, "s:mentioned_users", ""),
+                _ld(5, _str(1, "s:mentioned_users") + _str(2, "")),
+                _ld(5, _str(1, "s:client_message_id") + _str(2, mid)),
                 _vi(6, 7),
-                _str(7, info["ticket"]),
+                _str(7, "deprecated"),
                 _str(8, mid),
             ]
         )
+        did = self.auth.did()
+        frame = b"".join(
+            [
+                _vi(1, 100),
+                _vi(2, self._seq()),
+                _str(3, SDK),
+                _str(4, ""),
+                _vi(5, 3),
+                _vi(6, 0),
+                _str(7, BUILD),
+                _ld(8, _ld(100, body)),
+                _str(9, did),
+                _str(11, "web"),
+                _kv(15, "aid", "1988"),
+                _kv(15, "app_name", "tiktok_web"),
+                _kv(15, "channel", "web"),
+                _kv(15, "device_platform", "web_pc"),
+                _kv(15, "device_id", did),
+                _kv(15, "user_is_login", "true"),
+                _vi(18, 1),
+            ]
+        )
+        headers = self.auth.headers(HDR)
+        headers.update(heads(guard, "/v1/message/send"))
         try:
-            r = self.auth.client.post(
-                SEND,
-                params=self.auth.params(),
-                content=self._pack(100, 100, body),
-                headers=self.auth.headers(HDR),
-            )
+            r = self.auth.client.post(SEND, params=SEND_QS, content=frame, headers=headers)
         except Exception as e:
             out = {"ok": False, "code": -1, "msg": f"network error: {e}", "skip": False}
             self.last[peer or cid] = {"at": int(time.time()), **out, "text": text}
@@ -233,17 +305,11 @@ class Inbox:
             self.last[peer or cid] = {"at": int(time.time()), **out, "text": text}
             return out
         try:
-            env = _pb(r.content)
-            raw = _one(env, 3)
-            if raw is None:
-                code = int(r.status_code)
-            else:
-                code = int(raw)
+            code, msg = _ack(r.content, r.status_code)
         except (TypeError, ValueError):
             out = {"ok": False, "code": -7, "msg": "API response invalid", "skip": False}
             self.last[peer or cid] = {"at": int(time.time()), **out, "text": text}
             return out
-        msg = _txt(_one(env, 4)) or f"http {r.status_code}"
         skip = any(x in msg.lower() for x in SKIP) or code in (2154, 3002325, 3002282)
         out = {"ok": code == 0 or msg == "OK", "code": code, "msg": msg, "skip": skip}
         self.last[peer or cid] = {"at": int(time.time()), **out, "text": text}

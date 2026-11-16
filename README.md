@@ -24,6 +24,7 @@ Released under the **MIT License**. See [LICENSE](LICENSE).
 - [Python](https://www.python.org) 3.12+
 - [httpx](https://www.python-httpx.org)
 - [Rich](https://rich.readthedocs.io)
+- [cryptography](https://cryptography.io) (signs message sends)
 - [Docker](https://www.docker.com) (optional)
 
 ## usage
@@ -54,7 +55,17 @@ Paste into `.env` using the exact `TIKTOK_*` labels, or drop a `cookies.json` in
 
 7. `NUDGE_TIME` is the wait between reminder messages, in seconds only. `14400` is 4 hours. Blank uses that same default. Convert hours or minutes with the [time to seconds calculator](https://www.inchcalculator.com/time-to-seconds-calculator/).
 
-8. Run:
+8. Message send needs a ticket guard. Since 12 Nov 2026, `POST /v1/message/send` returns gateway `status_code` 7 unless the request is signed. Reads (streak list, inbox) still work with cookies alone. The signer uses three `.env` values, filled from the Chrome profile that is logged into TikTok on this machine:
+
+| key | what it is |
+| --- | --- |
+| `TIKTOK_GUARD_DER` | base64 PKCS8 P-256 private key |
+| `TIKTOK_GUARD_TS` | server `ts_sign` (`ts.1.` + hex) |
+| `TIKTOK_GUARD_TICKET` | ticket paired with that key |
+
+Existing `TIKTOK_SESSIONID` / `TIKTOK_SID_TT` / `TIKTOK_MSTOKEN` lines were not changed. If those three guard keys are empty, a local Windows run can still load them from Chrome's TikTok IndexedDB. Docker only sees what `--env-file .env` passes in, so the container needs the filled keys. Rebuild after this change (`cryptography` is a new dependency). Sends go to `https://im-api-sg.tiktok.com/v1/message/send` with sdk `1.8.5`. A good send logs `send <id> ok`. The streak list can lag one refresh behind the message showing up in the chat.
+
+9. Run:
 
 ```bash
 python main.py
